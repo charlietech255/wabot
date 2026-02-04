@@ -89,6 +89,12 @@ function setupAuthSync(conn) {
   })
 }
 
+const express = require("express");
+const app = express();
+app.use(express.json());
+app.use(express.text());
+const port = process.env.PORT || 8000;
+
 // Panel routes for QR, pairing code, and uploading creds
 app.get('/panel', (req, res) => {
   const token = process.env.PANEL_TOKEN;
@@ -242,12 +248,6 @@ app.post('/auth/upload', express.json(), async (req, res) => {
 })
 
 // Make sure to call setupAuthSync(conn) after creating connection object in connectToWA()
-
-const express = require("express");
-const app = express();
-app.use(express.json());
-app.use(express.text());
-const port = process.env.PORT || 8000;
 
 //=============================================
 
