@@ -46,6 +46,8 @@ initSessionFromDB();
 let latestQrDataUrl = null
 let latestPairingCode = null
 let pairingCodeExp = null
+// Current active WhatsApp connection (set when socket created)
+let currentConn = null
 
 function setupAuthSync(conn) {
   conn.ev.on('connection.update', async (update) => {
@@ -53,9 +55,13 @@ function setupAuthSync(conn) {
       try {
         latestQrDataUrl = await QRCode.toDataURL(update.qr)
         latestPairingCode = null
-        console.log('QR generated — visit /panel to scan it')
+        // Also print QR to terminal for quick scanning
+        if (qrcode && qrcode.generate) {
+          qrcode.generate(update.qr, { small: true })
+        }
+        console.log('QR generated — visit /panel to scan it (also printed to terminal)')
       } catch (e) {
-        console.error('Failed to generate QR data url', e.message || e)
+        console.error('Failed to generate QR data url', e.stack || e)
       }
     }
     if (update.receivedPendingNotifications) {
@@ -212,15 +218,32 @@ app.get('/qr', (req, res) => {
   res.send(img)
 })
 
-app.get('/auth/request-pairing-code', (req, res) => {
+app.get('/auth/request-pairing-code', async (req, res) => {
   const token = process.env.PANEL_TOKEN;
   if (token && req.headers['x-panel-token'] !== token) return res.status(401).send('Unauthorized');
-  
+
+  // Return existing code if still valid
   if (latestPairingCode && pairingCodeExp && new Date() < pairingCodeExp) {
     return res.json({ code: latestPairingCode })
   }
-  
-  res.status(400).send('No active pairing code. Restart bot or try QR code.')
+
+  // If we have an active connection, attempt to request a new pairing code
+  if (currentConn && typeof currentConn.requestPairingCode === 'function') {
+    try {
+      console.log('Panel requested new pairing code...')
+      const code = await currentConn.requestPairingCode(ownerNumber[0])
+      latestPairingCode = code
+      pairingCodeExp = new Date(Date.now() + 10 * 60000) // 10 minutes
+      console.log('Pairing code requested via panel — check /panel')
+      return res.json({ code: latestPairingCode })
+    } catch (e) {
+      console.error('Failed to request pairing code via panel:', e.stack || e)
+      return res.status(500).send('Failed to request pairing code')
+    }
+  }
+
+  // Fallback: no active connection available
+  res.status(503).send('No active WhatsApp connection to request pairing code')
 })
 
 
@@ -265,24 +288,15 @@ async function connectToWA() {
     version,
     generateHighQualityLinkPreview: true
   })
+  // Expose the active connection so routes can trigger pairing/OTP
+  currentConn = conn
 
-  // Request pairing code (OTP) for WhatsApp
-  if (!fs.existsSync(path.join(__dirname, 'starboy', 'creds.json'))) {
-    try {
-      console.log('Requesting pairing code for OTP auth...')
-      const code = await conn.requestPairingCode(ownerNumber[0])
-      latestPairingCode = code
-      pairingCodeExp = new Date(Date.now() + 10 * 60000) // 10 minutes
-      console.log('Pairing code available — visit /panel to see it')
-    } catch (e) {
-      console.error('Failed to request pairing code:', e.message || e)
-    }
-  }
+  // Pairing (OTP) is requested after the socket reports 'open' to ensure the connection is ready.
 
   // Hook up DB sync for authentication state and QR updates
   setupAuthSync(conn)
 
-  conn.ev.on('connection.update', (update) => {
+  conn.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update
     if (connection === 'close') {
       if (lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
@@ -303,8 +317,21 @@ async function connectToWA() {
 
       conn.sendMessage(ownerNumber + "@s.whatsapp.net", { image: { url: `https://pomf2.lain.la/f/uzu4feg.jpg` }, caption: up })
         .catch(e => {
-          console.error('Failed to send startup image:', e.message || e)
+          console.error('Failed to send startup image:', e.stack || e)
         })
+
+      // If no stored creds, request OTP pairing code now that the socket is open
+      try {
+        if (!fs.existsSync(path.join(__dirname, 'starboy', 'creds.json'))) {
+          console.log('Requesting pairing code for OTP auth...')
+          const code = await conn.requestPairingCode(ownerNumber[0])
+          latestPairingCode = code
+          pairingCodeExp = new Date(Date.now() + 10 * 60000) // 10 minutes
+          console.log('Pairing code available — visit /panel to see it')
+        }
+      } catch (e) {
+        console.error('Failed to request pairing code:', e.stack || e)
+      }
 
     }
   })
