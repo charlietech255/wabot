@@ -135,13 +135,18 @@ app.get('/panel', (req, res) => {
         </div>
 
         <div class="section">
-          <h2>🔐 Connect via Pairing Code (OTP)</h2>
-          <p>Click the button below to request a pairing code:</p>
+          <h2>🔐 Connect via Pairing</h2>
+          <p>Choose a method to connect:</p>
+          <div style="margin-bottom:8px;">
+            <input id="connect-phone" placeholder="+255712345678" style="padding:8px;width:220px" />
+            <button onclick="connectViaPush()">Connect (Push confirmation)</button>
+          </div>
+          <p>Or request a pairing code (OTP):</p>
           <button onclick="requestPairingCode()">Request Pairing Code</button>
           <div id="pairing-code-display" style="display:none;">
-            <p>Your pairing code (valid for 10 minutes):</p>
+            <p id="pairing-message">Your pairing code (valid for 10 minutes):</p>
             <div class="code" id="pairing-code">Loading...</div>
-            <p>Enter this code in WhatsApp to pair your account.</p>
+            <p>Enter this code in WhatsApp to pair your account or accept the device link on your phone.</p>
           </div>
         </div>
 
@@ -162,9 +167,19 @@ app.get('/panel', (req, res) => {
             }
             xhr.onload = function() {
               if (xhr.status === 200) {
-                const data = JSON.parse(xhr.responseText);
-                document.getElementById('pairing-code').textContent = data.code;
-                document.getElementById('pairing-code-display').style.display = 'block';
+                try {
+                  const data = JSON.parse(xhr.responseText);
+                  if (data.code) {
+                    document.getElementById('pairing-code').textContent = data.code;
+                    document.getElementById('pairing-message').textContent = 'Your pairing code (valid for 10 minutes):';
+                  } else if (data.message) {
+                    document.getElementById('pairing-message').textContent = data.message;
+                    document.getElementById('pairing-code').textContent = '';
+                  }
+                  document.getElementById('pairing-code-display').style.display = 'block';
+                } catch (e) {
+                  alert('Invalid response from server')
+                }
               } else {
                 alert('Error: ' + xhr.responseText);
               }
@@ -173,6 +188,37 @@ app.get('/panel', (req, res) => {
               alert('Failed to request pairing code');
             };
             xhr.send();
+          }
+
+          function connectViaPush() {
+            const phone = document.getElementById('connect-phone').value.trim();
+            if (!phone) { alert('Please enter a phone number (include country code)'); return; }
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/auth/request-pairing-code', true);
+            const panelToken = prompt('Enter PANEL_TOKEN (if set):');
+            if (panelToken) {
+              xhr.setRequestHeader('x-panel-token', panelToken);
+            }
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+              if (xhr.status === 200) {
+                try {
+                  const data = JSON.parse(xhr.responseText);
+                  if (data.code) {
+                    document.getElementById('pairing-code').textContent = data.code;
+                    document.getElementById('pairing-message').textContent = 'Your pairing code (valid for 10 minutes):';
+                  } else if (data.message) {
+                    document.getElementById('pairing-message').textContent = data.message;
+                    document.getElementById('pairing-code').textContent = '';
+                  }
+                  document.getElementById('pairing-code-display').style.display = 'block';
+                } catch (e) { alert('Invalid response from server') }
+              } else {
+                alert('Error: ' + xhr.responseText);
+              }
+            };
+            xhr.onerror = function() { alert('Failed to request connection'); };
+            xhr.send(JSON.stringify({ phone }));
           }
 
           function uploadCreds() {
@@ -244,6 +290,36 @@ app.get('/auth/request-pairing-code', async (req, res) => {
 
   // Fallback: no active connection available
   res.status(503).send('No active WhatsApp connection to request pairing code')
+})
+
+// POST: request pairing for a specific phone (push confirmation or OTP)
+app.post('/auth/request-pairing-code', async (req, res) => {
+  const token = process.env.PANEL_TOKEN;
+  if (token && req.headers['x-panel-token'] !== token) return res.status(401).send('Unauthorized');
+
+  const phone = req.body && req.body.phone ? String(req.body.phone).trim() : null;
+  if (!phone) return res.status(400).send('Missing phone parameter')
+
+  if (currentConn && typeof currentConn.requestPairingCode === 'function') {
+    try {
+      console.log('Panel requested pairing for phone', phone)
+      const code = await currentConn.requestPairingCode(phone)
+      if (code) {
+        latestPairingCode = code
+        pairingCodeExp = new Date(Date.now() + 10 * 60000)
+        return res.json({ code: latestPairingCode })
+      } else {
+        latestPairingCode = null
+        pairingCodeExp = null
+        return res.json({ message: 'Push confirmation sent — accept the device link in WhatsApp' })
+      }
+    } catch (e) {
+      console.error('Failed to request pairing for phone via panel:', e.stack || e)
+      return res.status(500).send('Failed to request pairing')
+    }
+  }
+
+  res.status(503).send('No active WhatsApp connection to request pairing')
 })
 
 
