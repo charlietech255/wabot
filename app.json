@@ -1,0 +1,36 @@
+{
+  "name": "charlie tech bot",
+  "description": "Charlie Tech Bot — deploy on Render. Use DATABASE_URL to persist sessions.",
+  "logo": "https://pomf2.lain.la/f/uzu4feg.jpg",
+  "keywords": ["whatsapp","bot","charlie"],
+  "success_url": "/",
+
+  "env": {
+    "DATABASE_URL": {
+      "description": "Render Postgres database URL (set by Render)",
+      "required": true
+    },
+
+    "PANEL_TOKEN": {
+      "description": "Optional token to protect the panel endpoints",
+      "required": false
+    },
+
+    "BOT_NAME": {
+      "description": "Optional bot name (default: charlie tech bot)",
+      "required": false
+    },
+
+    "ALIVE_IMG": {
+      "description": "Put your alive img here.",
+      "required": false
+    }
+},
+
+     "buildpacks": [
+        {
+            "url": "https://github.com/heroku/heroku-buildpack-nodejs.git"
+        }
+     ],
+  "stack": "heroku-24"
+}
